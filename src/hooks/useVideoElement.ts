@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
+/**
+ * Subscribe to a single HTMLVideoElement and expose play state + currentTime.
+ * Uses requestAnimationFrame for smooth currentTime updates without flooding
+ * React state on every native timeupdate (which fires ~4Hz).
+ */
 export function useVideoElement(video: HTMLVideoElement | null) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);

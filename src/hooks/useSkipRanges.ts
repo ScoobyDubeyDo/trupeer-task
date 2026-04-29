@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Word } from "../lib/transcript";
 
 export interface SkipRange {
+  /** Inclusive start index into the words array */
   start: number;
+  /** Inclusive end index */
   end: number;
 }
 
+/** Merge overlapping/adjacent ranges. */
 function normalize(ranges: SkipRange[]): SkipRange[] {
   if (ranges.length === 0) return ranges;
   const sorted = [...ranges].sort((a, b) => a.start - b.start);
@@ -25,6 +28,7 @@ function normalize(ranges: SkipRange[]): SkipRange[] {
 export function useSkipRanges(words: Word[]) {
   const [ranges, setRanges] = useState<SkipRange[]>([]);
 
+  // Map of word index -> true if skipped. Built once per ranges change.
   const skipped = useMemo(() => {
     const set = new Set<number>();
     for (const r of ranges) {
@@ -46,6 +50,7 @@ export function useSkipRanges(words: Word[]) {
           out.push(r);
           continue;
         }
+        // Split the range around the removed index.
         if (index > r.start) out.push({ start: r.start, end: index - 1 });
         if (index < r.end) out.push({ start: index + 1, end: r.end });
       }
@@ -53,6 +58,7 @@ export function useSkipRanges(words: Word[]) {
     });
   }, []);
 
+  // Sorted list of skip time intervals [startSec, endSec] for fast lookup.
   const timeIntervals = useMemo(() => {
     return ranges
       .map((r) => {
@@ -65,6 +71,7 @@ export function useSkipRanges(words: Word[]) {
       .sort((a, b) => a[0] - b[0]);
   }, [ranges, words]);
 
+  /** Returns the end of the skip interval containing `t`, or null. */
   const skipEndAt = useCallback(
     (t: number): number | null => {
       for (const [s, e] of timeIntervals) {
@@ -79,6 +86,9 @@ export function useSkipRanges(words: Word[]) {
   return { ranges, skipped, addRange, removeAt, skipEndAt };
 }
 
+/**
+ * While the video is playing, jump past any skipped intervals.
+ */
 export function useSkipPlayback(
   video: HTMLVideoElement | null,
   skipEndAt: (t: number) => number | null,

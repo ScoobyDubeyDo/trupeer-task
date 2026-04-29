@@ -20,6 +20,7 @@ export interface VideoMeta {
 const TRANSCRIPT_URL = "/assets/transcript.json";
 const VIDEO_SRC = "/assets/video.mp4";
 
+// Mock API: artificial latency to simulate a network call.
 function delay<T>(value: T, ms = 250): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms));
 }

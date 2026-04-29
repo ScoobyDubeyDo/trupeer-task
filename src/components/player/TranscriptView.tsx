@@ -5,13 +5,22 @@ import { cn } from "../../lib/utils";
 
 interface TranscriptViewProps {
   words: Word[];
+  /** Index of the word currently being spoken (-1 if none). */
   activeIndex: number;
+  /** Set of word indices that are skipped. */
   skipped: Set<number>;
+  /** User selected indices [from, to] -> create a skip range. */
   onSkip: (start: number, end: number) => void;
+  /** Click a skipped word to unskip its range. */
   onUnskip: (index: number) => void;
+  /** Click a word to seek video to that timestamp. */
   onSeekToWord: (index: number) => void;
 }
 
+/**
+ * Single rendered token. Memoized so unrelated state changes (e.g. another word
+ * becoming active far away in the list) don't re-render every token.
+ */
 const Token = memo(function Token({
   word,
   index,
@@ -71,6 +80,8 @@ export function TranscriptView({
     [skipped, onUnskip, onSeekToWord],
   );
 
+  // Watch the document's text selection. When it spans words inside our
+  // container, compute the index range and show the Skip pill above it.
   useEffect(() => {
     function onSelectionChange() {
       const sel = window.getSelection();
@@ -119,6 +130,9 @@ export function TranscriptView({
     setSelection(null);
   };
 
+  // ---------- Lightweight virtualization ----------
+  // Real-world transcripts can be thousands of words. Render in chunks and
+  // mount only chunks near the viewport. Each chunk is ~120 words.
   const CHUNK_SIZE = 120;
   const chunks = useMemo(() => {
     const out: Word[][] = [];
@@ -128,6 +142,7 @@ export function TranscriptView({
     return out;
   }, [words]);
 
+  // Auto-scroll so the active word stays visible.
   useEffect(() => {
     if (activeIndex < 0) return;
     const el = containerRef.current?.querySelector(
@@ -188,6 +203,10 @@ export function TranscriptView({
   );
 }
 
+/**
+ * Render a chunk only when it has been mounted at least once near the
+ * viewport. Keeps initial render and re-render cost low for long transcripts.
+ */
 const Chunk = memo(function Chunk({
   chunk,
   baseIndex,
@@ -201,6 +220,8 @@ const Chunk = memo(function Chunk({
   skipped: Set<number>;
   onWordClick: (i: number) => void;
 }) {
+  // Per-chunk active flag: this chunk only re-renders if active is inside it
+  // OR it transitioned from active to inactive (handled by changing prop).
   const localActive =
     activeIndex >= baseIndex && activeIndex < baseIndex + chunk.length
       ? activeIndex

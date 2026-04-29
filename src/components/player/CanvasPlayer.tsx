@@ -4,8 +4,11 @@ import * as THREE from "three";
 export interface CanvasPlayerProps {
   videoSrc: string;
   backgroundSrc: string;
+  /** Padding around the video, 0-100 (% of available space). */
   padding: number;
+  /** Border radius of the video, 0-100 (% of half min dimension). */
   rounding: number;
+  /** Called when the underlying <video> emits metadata, time updates, etc. */
   onReady?: (video: HTMLVideoElement) => void;
 }
 
@@ -13,6 +16,13 @@ export interface CanvasPlayerHandle {
   video: HTMLVideoElement | null;
 }
 
+/**
+ * Self-contained Three.js video player.
+ *
+ * Renders a background image plane and a video plane composited on a single
+ * WebGL canvas. Exposes the underlying <video> element via ref so the parent
+ * can wire playback controls without prop drilling state into Three.js.
+ */
 export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
   function CanvasPlayer(
     { videoSrc, backgroundSrc, padding, rounding, onReady },
@@ -21,6 +31,7 @@ export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
     const containerRef = useRef<HTMLDivElement>(null);
     const videoRef = useRef<HTMLVideoElement | null>(null);
 
+    // Mutable refs for animation params — avoid React re-renders on every frame.
     const paddingRef = useRef(padding);
     const roundingRef = useRef(rounding);
     paddingRef.current = padding;
@@ -32,6 +43,7 @@ export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
       const container = containerRef.current;
       if (!container) return;
 
+      // ---------- Video element (offscreen, fed into a THREE.VideoTexture) ----------
       const video = document.createElement("video");
       video.src = videoSrc;
       video.playsInline = true;
@@ -41,6 +53,7 @@ export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
       videoRef.current = video;
       onReady?.(video);
 
+      // ---------- Three.js setup ----------
       const scene = new THREE.Scene();
       const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
       camera.position.z = 1;
@@ -55,6 +68,7 @@ export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
       renderer.domElement.style.height = "100%";
       renderer.domElement.style.display = "block";
 
+      // Background plane — a textured quad that fills the viewport.
       const bgTexture = new THREE.TextureLoader().load(backgroundSrc, (tex) => {
         const img = tex.image as HTMLImageElement | undefined;
         if (img) bgMaterial.uniforms.uImage.value.set(img.width, img.height);
@@ -67,14 +81,15 @@ export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
           uViewport: { value: new THREE.Vector2(1, 1) },
           uImage: { value: new THREE.Vector2(16, 9) },
         },
-        vertexShader: `
+        vertexShader: /* glsl */ `
           varying vec2 vUv;
           void main() {
             vUv = uv;
             gl_Position = vec4(position, 1.0);
           }
         `,
-        fragmentShader: `
+        // Cover-fit: scale UVs so the image fills the viewport without distortion.
+        fragmentShader: /* glsl */ `
           uniform sampler2D uTex;
           uniform vec2 uViewport;
           uniform vec2 uImage;
@@ -97,6 +112,9 @@ export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
       const bgMesh = new THREE.Mesh(bgGeometry, bgMaterial);
       scene.add(bgMesh);
 
+      // (bg aspect handled in TextureLoader callback above)
+
+      // Video plane — uses a custom shader to apply rounded corners.
       const videoTexture = new THREE.VideoTexture(video);
       videoTexture.colorSpace = THREE.SRGBColorSpace;
       videoTexture.minFilter = THREE.LinearFilter;
@@ -107,17 +125,18 @@ export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
         transparent: true,
         uniforms: {
           uTex: { value: videoTexture },
-          uSize: { value: new THREE.Vector2(1, 1) },
-          uRadius: { value: 0 },
+          uSize: { value: new THREE.Vector2(1, 1) }, // pixel size of the plane
+          uRadius: { value: 0 }, // pixel radius
         },
-        vertexShader: `
+        vertexShader: /* glsl */ `
           varying vec2 vUv;
           void main() {
             vUv = uv;
             gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
           }
         `,
-        fragmentShader: `
+        // Signed-distance rounded-rect mask for crisp anti-aliased corners.
+        fragmentShader: /* glsl */ `
           uniform sampler2D uTex;
           uniform vec2 uSize;
           uniform float uRadius;
@@ -141,6 +160,7 @@ export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
       const videoMesh = new THREE.Mesh(videoGeometry, videoMaterial);
       scene.add(videoMesh);
 
+      // ---------- Layout ----------
       let viewportW = 1;
       let viewportH = 1;
 
@@ -150,12 +170,14 @@ export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
         viewportH = Math.max(1, Math.floor(rect.height));
         renderer.setSize(viewportW, viewportH, false);
 
+        // Orthographic frustum spans the viewport in pixel units.
         camera.left = -viewportW / 2;
         camera.right = viewportW / 2;
         camera.top = viewportH / 2;
         camera.bottom = -viewportH / 2;
         camera.updateProjectionMatrix();
 
+        // Background covers full viewport (geometry is full clip-space; just update aspect).
         bgMaterial.uniforms.uViewport.value.set(viewportW, viewportH);
 
         layoutVideo();
@@ -166,6 +188,7 @@ export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
         const vh = video.videoHeight || 9;
         const videoAspect = vw / vh;
 
+        // padding 0..100 maps to 0..30% of min viewport dim.
         const pad =
           (paddingRef.current / 100) * Math.min(viewportW, viewportH) * 0.6;
         const availW = Math.max(10, viewportW - pad * 2);
@@ -180,6 +203,7 @@ export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
 
         videoMesh.scale.set(w, h, 1);
         videoMaterial.uniforms.uSize.value.set(w, h);
+        // rounding 0..100 -> 0..min(w,h)/2
         videoMaterial.uniforms.uRadius.value =
           (roundingRef.current / 100) * (Math.min(w, h) / 2);
       }
@@ -190,6 +214,7 @@ export const CanvasPlayer = forwardRef<CanvasPlayerHandle, CanvasPlayerProps>(
 
       video.addEventListener("loadedmetadata", layoutVideo);
 
+      // ---------- Render loop ----------
       let raf = 0;
       let lastPad = -1;
       let lastRound = -1;
